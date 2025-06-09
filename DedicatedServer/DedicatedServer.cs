@@ -1,9 +1,11 @@
 ﻿using System.Collections.Generic;
 using System.Reflection;
+using System.Reflection.Emit;
 using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
 using ServerSync;
+using UnityEngine;
 
 namespace DedicatedServer;
 
@@ -12,7 +14,7 @@ namespace DedicatedServer;
 public class DedicatedServer : BaseUnityPlugin
 {
 	private const string ModName = "DedicatedServer";
-	private const string ModVersion = "1.0.0";
+	private const string ModVersion = "1.0.1";
 	private const string ModGUID = "org.bepinex.plugins.dedicatedserver";
 
 	private static readonly ConfigSync configSync = new(ModName) { DisplayName = ModName, CurrentVersion = ModVersion, MinimumRequiredVersion = ModVersion, ModRequired = true };
@@ -55,7 +57,7 @@ public class DedicatedServer : BaseUnityPlugin
 			AccessTools.DeclaredMethod(typeof(ZDO), nameof(ZDO.SetOwner)),
 			AccessTools.DeclaredMethod(typeof(ZDO), nameof(ZDO.SetOwnerInternal)),
 		};
-		
+
 		private static void Prefix(ref long uid)
 		{
 			if (uid == 0 && ZNet.instance.IsServer())
@@ -110,9 +112,9 @@ public class DedicatedServer : BaseUnityPlugin
 				HashSet<Vector2i> sectorPoints = new();
 				HashSet<Vector2i> distantSectorPoints = new();
 
-				foreach (ZNetPeer peer in ZNet.instance.m_peers)
+				void AddSectorPoints(Vector3 pos)
 				{
-					Vector2i sector = ZoneSystem.GetZone(peer.GetRefPos());
+					Vector2i sector = ZoneSystem.GetZone(pos);
 
 					sectorPoints.Add(sector);
 					for (int index = 1; index <= area; ++index)
@@ -142,25 +144,78 @@ public class DedicatedServer : BaseUnityPlugin
 						}
 					}
 				}
-				
+
+				foreach (ZNetPeer peer in ZNet.instance.m_peers)
+				{
+					AddSectorPoints(peer.GetRefPos());
+				}
+
+				if (!ZNet.instance.IsDedicated())
+				{
+					AddSectorPoints(Player.m_localPlayer?.transform.position ?? ZNet.instance.GetReferencePosition());
+				}
+
 				foreach (Vector2i sector in sectorPoints)
 				{
 					ZoneSystem.instance.PokeLocalZone(sector);
 					__instance.FindObjects(sector, sectorObjects);
+					foreach (ZDO zdo in sectorObjects)
+					{
+						if (!zdo.Owned && !__instance.IsInPeerActiveArea(sector, zdo.GetOwner()))
+						{
+							zdo.SetOwner(__instance.m_sessionID);
+						}
+					}
 					distantSectorPoints.Remove(sector);
 				}
-				
+
 				List<ZDO> objects = distantSectorObjects ?? sectorObjects;
 				foreach (Vector2i sector in distantSectorPoints)
 				{
 					ZoneSystem.instance.PokeLocalZone(sector);
 					__instance.FindDistantObjects(sector, objects);
 				}
-				
+
 				return false;
 			}
-			
+
 			return true;
+		}
+	}
+
+	[HarmonyPatch(typeof(SpawnSystem), nameof(SpawnSystem.UpdateSpawning))]
+	private static class RemoveLocalPlayerCheckFromSpawnSystem
+	{
+		private static readonly FieldInfo localPlayer = AccessTools.DeclaredField(typeof(Player), nameof(Player.m_localPlayer));
+
+		private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+		{
+			bool isSkipping = false;
+			List<Label>? labels = null;
+			foreach (CodeInstruction instruction in instructions)
+			{
+				if (!isSkipping)
+				{
+					if (instruction.LoadsField(localPlayer))
+					{
+						labels = instruction.labels;
+						isSkipping = true;
+					}
+					else
+					{
+						if (labels is not null)
+						{
+							instruction.labels.AddRange(labels);
+							labels = null;
+						}
+						yield return instruction;
+					}
+				}
+				else if (instruction.opcode == OpCodes.Ret)
+				{
+					isSkipping = false;
+				}
+			}
 		}
 	}
 }
