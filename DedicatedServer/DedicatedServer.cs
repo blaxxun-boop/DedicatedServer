@@ -79,27 +79,10 @@ public class DedicatedServer : BaseUnityPlugin
 		}
 	}
 
-	[HarmonyPatch(typeof(ZDOMan), nameof(ZDOMan.IsInPeerActiveArea))]
-	private static class ActivateAreas
-	{
-		private static bool Prefix(ref bool __result, long uid)
-		{
-			if (uid == (ZNet.instance.IsServer() ? ZDOMan.GetSessionID() : ZNet.instance.GetServerPeer().m_uid))
-			{
-				__result = true;
-				return false;
-			}
-			return true;
-		}
-	}
-
 	[HarmonyPatch(typeof(ZDOMan), nameof(ZDOMan.ReleaseNearbyZDOS))]
-	private static class DoNotAssignPeerToZDO
+	private static class DoNotAssignZDOHere
 	{
-		private static bool Prefix(long uid)
-		{
-			return uid == ZDOMan.GetSessionID();
-		}
+		private static bool Prefix() => false;
 	}
 
 	[HarmonyPatch(typeof(ZDOMan), nameof(ZDOMan.FindSectorObjects))]
@@ -157,22 +140,24 @@ public class DedicatedServer : BaseUnityPlugin
 
 				foreach (Vector2i sector in sectorPoints)
 				{
-					ZoneSystem.instance.PokeLocalZone(sector);
-					__instance.FindObjects(sector, sectorObjects);
-					foreach (ZDO zdo in sectorObjects)
-					{
-						if (!zdo.Owned && !__instance.IsInPeerActiveArea(sector, zdo.GetOwner()))
-						{
-							zdo.SetOwner(__instance.m_sessionID);
-						}
-					}
 					distantSectorPoints.Remove(sector);
+					ZoneSystem.instance.PokeLocalZone(sector);
+					if (!ZoneSystem.instance.m_zones.ContainsKey(sector)) continue;
+					__instance.FindObjects(sector, sectorObjects);
+				}
+				foreach (ZDO zdo in sectorObjects)
+				{
+					if (zdo.Persistent && !zdo.Owner && !__instance.IsInPeerActiveArea(zdo.GetSector(), zdo.GetOwner()))
+					{
+						zdo.SetOwner(__instance.m_sessionID);
+					}
 				}
 
 				List<ZDO> objects = distantSectorObjects ?? sectorObjects;
 				foreach (Vector2i sector in distantSectorPoints)
 				{
 					ZoneSystem.instance.PokeLocalZone(sector);
+					if (!ZoneSystem.instance.m_zones.ContainsKey(sector)) continue;
 					__instance.FindDistantObjects(sector, objects);
 				}
 
