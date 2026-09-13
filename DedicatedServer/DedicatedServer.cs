@@ -14,7 +14,7 @@ namespace DedicatedServer;
 public class DedicatedServer : BaseUnityPlugin
 {
 	private const string ModName = "DedicatedServer";
-	private const string ModVersion = "1.0.2";
+	private const string ModVersion = "1.0.3";
 	private const string ModGUID = "org.bepinex.plugins.dedicatedserver";
 
 	private static readonly ConfigSync configSync = new(ModName) { DisplayName = ModName, CurrentVersion = ModVersion, MinimumRequiredVersion = ModVersion, ModRequired = true };
@@ -89,6 +89,7 @@ public class DedicatedServer : BaseUnityPlugin
 				__result = true;
 				return false;
 			}
+
 			return true;
 		}
 	}
@@ -105,42 +106,88 @@ public class DedicatedServer : BaseUnityPlugin
 	[HarmonyPatch(typeof(ZDOMan), nameof(ZDOMan.FindSectorObjects))]
 	private static class LoadActiveAreas
 	{
-		private static bool Prefix(ZDOMan __instance, int area, int distantArea, List<ZDO> sectorObjects, List<ZDO>? distantSectorObjects = null)
+		private static bool Prefix(ZDOMan __instance, SimulationDistance simulationDistance, List<ZDO> sectorObjects, List<ZDO>? distantSectorObjects = null)
 		{
 			if (ZNet.instance.IsServer() && sectorObjects != __instance.m_tempSectorObjects /* exempt the call in ZDOMan.CreateSyncList */)
 			{
-				HashSet<Vector2i> sectorPoints = new();
-				HashSet<Vector2i> distantSectorPoints = new();
+				HashSet<Vector2s> sectorPoints = new();
+				HashSet<Vector2s> distantSectorPoints = new();
 
 				void AddSectorPoints(Vector3 pos)
 				{
-					Vector2i sector = ZoneSystem.GetZone(pos);
+					Vector2s sector = ZoneSystem.GetZone(pos);
 
 					sectorPoints.Add(sector);
-					for (int index = 1; index <= area; ++index)
+					for (int index = 1; index <= simulationDistance.NearSimulationDistance; ++index)
 					{
-						for (int _x = sector.x - index; _x <= sector.x + index; ++_x)
+						for (short x = (short)(sector.x - index); x <= sector.x + index; ++x)
 						{
-							sectorPoints.Add(new Vector2i(_x, sector.y - index));
-							sectorPoints.Add(new Vector2i(_x, sector.y + index));
+							Vector2s vector2s1 = new Vector2s(x, sector.y - index);
+							Vector2s vector2s2 = new Vector2s(x, sector.y + index);
+							if (ZoneSystem.instance.ZonesWithinRadius(sector, vector2s1, simulationDistance.NearSimulationDistance) || simulationDistance.IsClassic)
+							{
+								sectorPoints.Add(vector2s1);
+							}
+
+							if (ZoneSystem.instance.ZonesWithinRadius(sector, vector2s2, simulationDistance.NearSimulationDistance) || simulationDistance.IsClassic)
+							{
+								sectorPoints.Add(vector2s2);
+							}
 						}
-						for (int _y = sector.y - index + 1; _y <= sector.y + index - 1; ++_y)
+
+						for (int y = sector.y - index + 1; y <= sector.y + index - 1; ++y)
 						{
-							sectorPoints.Add(new Vector2i(sector.x - index, _y));
-							sectorPoints.Add(new Vector2i(sector.x + index, _y));
+							Vector2s vector2s3 = new Vector2s(sector.x - index, y);
+							Vector2s vector2s4 = new Vector2s(sector.x + index, y);
+							if (ZoneSystem.instance.ZonesWithinRadius(sector, vector2s3, simulationDistance.NearSimulationDistance) || simulationDistance.IsClassic)
+							{
+								sectorPoints.Add(vector2s3);
+							}
+
+							if (ZoneSystem.instance.ZonesWithinRadius(sector, vector2s4, simulationDistance.NearSimulationDistance) || simulationDistance.IsClassic)
+							{
+								sectorPoints.Add(vector2s4);
+							}
 						}
 					}
-					for (int index = area + 1; index <= area + distantArea; ++index)
+
+					List<ZDO> objects = distantSectorObjects ?? sectorObjects;
+					int distantObjectsStart = 1;
+					if (simulationDistance.IsClassic)
 					{
-						for (int _x = sector.x - index; _x <= sector.x + index; ++_x)
+						distantObjectsStart += simulationDistance.NearSimulationDistance;
+					}
+
+					for (int index = distantObjectsStart; index <= simulationDistance.TotalSimulationDistance; ++index)
+					{
+						for (int x = sector.x - index; x <= sector.x + index; ++x)
 						{
-							distantSectorPoints.Add(new Vector2i(_x, sector.y - index));
-							distantSectorPoints.Add(new Vector2i(_x, sector.y + index));
+							Vector2s vector2s = new Vector2s(x, sector.y - index);
+							Vector2s sector1 = new Vector2s(x, sector.y + index);
+							if (ZoneSystem.instance.ZonesWithinRadius(sector, vector2s, simulationDistance.TotalSimulationDistance, true) || simulationDistance.IsClassic)
+							{
+								distantSectorPoints.Add(vector2s);
+							}
+
+							if (ZoneSystem.instance.ZonesWithinRadius(sector, vector2s, simulationDistance.TotalSimulationDistance, true) || simulationDistance.IsClassic)
+							{
+								distantSectorPoints.Add(sector1);
+							}
 						}
-						for (int _y = sector.y - index + 1; _y <= sector.y + index - 1; ++_y)
+
+						for (int y = sector.y - index + 1; y <= sector.y + index - 1; ++y)
 						{
-							distantSectorPoints.Add(new Vector2i(sector.x - index, _y));
-							distantSectorPoints.Add(new Vector2i(sector.x + index, _y));
+							Vector2s vector2s = new Vector2s(sector.x - index, y);
+							Vector2s sector2 = new Vector2s(sector.x + index, y);
+							if (ZoneSystem.instance.ZonesWithinRadius(sector, vector2s, simulationDistance.TotalSimulationDistance, true) || simulationDistance.IsClassic)
+							{
+								__instance.FindDistantObjects(vector2s, objects, __instance.m_visitedSectorIndices);
+							}
+
+							if (ZoneSystem.instance.ZonesWithinRadius(sector, vector2s, simulationDistance.TotalSimulationDistance, true) || simulationDistance.IsClassic)
+							{
+								__instance.FindDistantObjects(sector2, objects, __instance.m_visitedSectorIndices);
+							}
 						}
 					}
 				}
@@ -155,27 +202,34 @@ public class DedicatedServer : BaseUnityPlugin
 					AddSectorPoints(Player.m_localPlayer?.transform.position ?? ZNet.instance.GetReferencePosition());
 				}
 
-				foreach (Vector2i sector in sectorPoints)
+				__instance.m_visitedSectorIndices.Clear();
+
+				foreach (Vector2s sector in sectorPoints)
 				{
 					distantSectorPoints.Remove(sector);
 					ZoneSystem.instance.PokeLocalZone(sector);
-					if (!ZoneSystem.instance.m_zones.ContainsKey(sector)) continue;
-					__instance.FindObjects(sector, sectorObjects);
+					if (!ZoneSystem.instance.m_zones.ContainsKey(sector))
+					{
+						continue;
+					}
+
+					__instance.FindObjects(sector, sectorObjects, __instance.m_visitedSectorIndices);
 				}
+
 				foreach (ZDO zdo in sectorObjects)
 				{
-					if (zdo.Persistent && !zdo.Owner && !__instance.IsInPeerActiveArea(zdo.GetSector(), zdo.GetOwner()))
+					if (zdo.Persistent && !zdo.Owner && !__instance.IsInPeerActiveArea(zdo.GetPosition(), zdo.GetOwner()))
 					{
 						zdo.SetOwner(__instance.m_sessionID);
 					}
 				}
 
 				List<ZDO> objects = distantSectorObjects ?? sectorObjects;
-				foreach (Vector2i sector in distantSectorPoints)
+				foreach (Vector2s sector in distantSectorPoints)
 				{
 					ZoneSystem.instance.PokeLocalZone(sector);
 					if (!ZoneSystem.instance.m_zones.ContainsKey(sector)) continue;
-					__instance.FindDistantObjects(sector, objects);
+					__instance.FindDistantObjects(sector, objects, __instance.m_visitedSectorIndices);
 				}
 
 				return false;
@@ -210,12 +264,52 @@ public class DedicatedServer : BaseUnityPlugin
 							instruction.labels.AddRange(labels);
 							labels = null;
 						}
+
 						yield return instruction;
 					}
 				}
 				else if (instruction.opcode == OpCodes.Ret)
 				{
 					isSkipping = false;
+				}
+			}
+		}
+	}
+
+	[HarmonyPatch(typeof(SpawnSystem), nameof(SpawnSystem.UpdateSpawning))]
+	private static class DropHeightmapBiomeCheck
+	{
+		private static readonly MethodInfo haveBiome = AccessTools.DeclaredMethod(typeof(Heightmap), nameof(Heightmap.HaveBiome));
+
+		private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+		{
+			foreach (CodeInstruction instruction in instructions)
+			{
+				yield return instruction;
+				if (instruction.Calls(haveBiome))
+				{
+					yield return new CodeInstruction(OpCodes.Pop);
+					yield return new CodeInstruction(OpCodes.Ldc_I4_1);
+				}
+			}
+		}
+	}
+
+	[HarmonyPatch(typeof(Pickable), nameof(Pickable.RPC_Pick))]
+	private static class FixVanillaPickableFetchingLocalPlayer
+	{
+		private static readonly FieldInfo localPlayer = AccessTools.DeclaredField(typeof(Player), nameof(Player.m_localPlayer));
+
+		private static Player mockPlayer(Player? player) => player ?? new Player { m_nview = new ZNetView() };
+
+		private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+		{
+			foreach (CodeInstruction instruction in instructions)
+			{
+				yield return instruction;
+				if (instruction.LoadsField(localPlayer))
+				{
+					yield return new CodeInstruction(OpCodes.Call, AccessTools.DeclaredMethod(typeof(FixVanillaPickableFetchingLocalPlayer), nameof(mockPlayer)));
 				}
 			}
 		}
