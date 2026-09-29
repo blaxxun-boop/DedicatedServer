@@ -295,6 +295,41 @@ public class DedicatedServer : BaseUnityPlugin
 		}
 	}
 
+	[HarmonyPatch(typeof(SpawnSystem), nameof(SpawnSystem.UpdateSpawning))]
+	private static class SpawnEventCreaturesOnServer
+	{
+		private static readonly MethodInfo getCurrentSpawners = AccessTools.DeclaredMethod(typeof(RandEventSystem), nameof(RandEventSystem.GetCurrentSpawners));
+
+		private static List<SpawnSystem.SpawnData>? GetEventSpawners(List<SpawnSystem.SpawnData>? spawners)
+		{
+			// vanilla only activates an event around Player.m_localPlayer, which a dedicated server doesn't have
+			if (spawners is null && ZNet.instance.IsServer() && RandEventSystem.instance.m_randomEvent is { } randomEvent && randomEvent.m_time > randomEvent.m_spawnerDelay)
+			{
+				foreach (Player player in SpawnSystem.m_tempNearPlayers)
+				{
+					if (RandEventSystem.instance.IsInsideRandomEventArea(randomEvent, player.transform.position))
+					{
+						return randomEvent.m_spawn;
+					}
+				}
+			}
+
+			return spawners;
+		}
+
+		private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+		{
+			foreach (CodeInstruction instruction in instructions)
+			{
+				yield return instruction;
+				if (instruction.Calls(getCurrentSpawners))
+				{
+					yield return new CodeInstruction(OpCodes.Call, AccessTools.DeclaredMethod(typeof(SpawnEventCreaturesOnServer), nameof(GetEventSpawners)));
+				}
+			}
+		}
+	}
+
 	[HarmonyPatch(typeof(Pickable), nameof(Pickable.RPC_Pick))]
 	private static class FixVanillaPickableFetchingLocalPlayer
 	{
