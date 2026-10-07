@@ -314,4 +314,12 @@ public class DedicatedServer : BaseUnityPlugin
 			}
 		}
 	}
+
+	[HarmonyPatch(typeof(Leviathan), nameof(Leviathan.RPC_Left))]
+	private static class FixVanillaLeviathanFetchingLocalPlayer
+	{
+		// RPC_Left credits the dive to the local player. Leave() broadcasts it, and the owner handles its own copy before
+		// it is sent on, so on the server the null local player threw and no client ever got the RPC (or the stat).
+		private static bool Prefix() => Player.m_localPlayer != null;
+	}
 }
