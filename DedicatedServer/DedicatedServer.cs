@@ -314,4 +314,24 @@ public class DedicatedServer : BaseUnityPlugin
 			}
 		}
 	}
+
+	[HarmonyPatch(typeof(Ship), nameof(Ship.UpdateSailSize))]
+	private static class FixVanillaShipFetchingLocalPlayer
+	{
+		private static readonly FieldInfo localPlayer = AccessTools.DeclaredField(typeof(Player), nameof(Player.m_localPlayer));
+
+		private static Player mockPlayer(Player? player) => player ?? new Player { m_nview = new ZNetView() };
+
+		private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+		{
+			foreach (CodeInstruction instruction in instructions)
+			{
+				yield return instruction;
+				if (instruction.LoadsField(localPlayer))
+				{
+					yield return new CodeInstruction(OpCodes.Call, AccessTools.DeclaredMethod(typeof(FixVanillaShipFetchingLocalPlayer), nameof(mockPlayer)));
+				}
+			}
+		}
+	}
 }
