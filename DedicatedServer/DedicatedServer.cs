@@ -314,4 +314,26 @@ public class DedicatedServer : BaseUnityPlugin
 			}
 		}
 	}
+
+	[HarmonyPatch(typeof(Ship), nameof(Ship.TakeAshlandsDamage))]
+	private static class FixVanillaShipAshlandsFetchingLocalPlayer
+	{
+		private static readonly FieldInfo localPlayer = AccessTools.DeclaredField(typeof(Player), nameof(Player.m_localPlayer));
+
+		// the AshlandsOcean global key (Hugin's boiling water hint) is only set where a local player exists; on the server, count a player aboard
+		private static Player? playerAboard(Player? player, Ship ship) => player ?? (ship.m_players.Count > 0 ? ship.m_players[0] : null);
+
+		private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+		{
+			foreach (CodeInstruction instruction in instructions)
+			{
+				yield return instruction;
+				if (instruction.LoadsField(localPlayer))
+				{
+					yield return new CodeInstruction(OpCodes.Ldarg_0);
+					yield return new CodeInstruction(OpCodes.Call, AccessTools.DeclaredMethod(typeof(FixVanillaShipAshlandsFetchingLocalPlayer), nameof(playerAboard)));
+				}
+			}
+		}
+	}
 }
